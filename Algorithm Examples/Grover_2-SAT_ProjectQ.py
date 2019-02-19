@@ -12,6 +12,7 @@ import math
 
 # (x OR y) AND (~x OR y) AND (x OR ~y)
 # xy = 00, 01, 10, 11
+# Should yield '11' 100% of the time
 
 eng=MainEngine()
 r=eng.allocate_qureg(2)
@@ -45,10 +46,10 @@ with Loop(eng, num_it):
     ControlledGate(X, 2) | (r[0], r[1], ancilla[2])
     X | r[0]
 
-    # Step 3: Tag the correct state (00, 01, 10, 11)
+# Step 3: Tag the correct state (00, 01, 10, 11)
     ControlledGate(X, 3) | (ancilla[0], ancilla[1], ancilla[2], q)
 
-    # Uncompute (Step 2 in reverse)
+# Uncompute (Step 2 in reverse)
     X | r[0]
     X | ancilla[2]
     ControlledGate(X, 2) | (r[0], r[1], ancilla[2])
@@ -66,7 +67,7 @@ with Loop(eng, num_it):
     X | r[0]
     X | r[1]
 
-    # Step 4: Amplitude amplification
+# Step 4: Amplitude amplification
     All(H) | r
     All(X) | r
     ControlledGate(Z, 1) | (r[0], r[1])
