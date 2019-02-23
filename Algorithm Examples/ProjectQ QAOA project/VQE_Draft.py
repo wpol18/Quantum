@@ -1,13 +1,14 @@
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#  Variational QUantum Eigensolver
+#  Variational Quantum Eigensolver
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
 from projectq import MainEngine
-from projectq.ops import QubitOperator, Measure, All, Rx, Ry, H, X
+from projectq.ops import QubitOperator, Measure, All, Rx, Ry
 
 import numpy as np
 from collections import Counter
+import time
 
 class VQE(object):
 
@@ -19,11 +20,8 @@ class VQE(object):
         ''' Main function. '''
         pass
 
-    @staticmethod
-    def expectation(state_prep,
-                    hamiltonian: QubitOperator,
-                    shots: int,
-                    eng: MainEngine) -> float:
+    
+    def expectation(self, state_prep, hamiltonian, shots, eng):
         
         """
         Compute the expecation value of a given hamiltonian over the distribution
@@ -63,46 +61,51 @@ class VQE(object):
 
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        # Look through terms of Hamiltonian and some correcting rotations to 
+        # Get expectation, term by term
+        #
+        # Hamiltonians are made up of Pauli gates: Is, Xs, Ys, and Zs
+        #
+        # Look through terms of Hamiltonian and add some correcting rotations to 
         # throw specific qubits back into the Z-basis (the native measuring basis)
+        # when term is an X or a Y
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        rotations = []
-        marked_qubits = []
+        expectation_total = 0
         for term, coefficient in hamiltonian.terms.items():
-            #rotations = []
-            #qubits_to_measure = []
-            #marked_qubits = []
+
+            rotations = []
+            marked_qubits = []
+
+            if term == ():
+                expectation_total += coefficient
 
             for index, gate in term:
+                marked_qubits.append(index)
                 if gate == 'X':
-                    rotations.append(Ry(-np.pi/2))
-                    marked_qubits.append(index)
+                    rotations.append((Ry(-np.pi/2), index))
                 elif gate == 'Y':
-                    rotations.append(Rx(np.pi/2))
-                    marked_qubits.append(index)
+                    rotations.append((Rx(np.pi/2), index))
 
 
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # run through circuit `shots` number of times
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        results = []
-        for _ in range(shots):
+            results = []
+            for _ in range(shots):
 
-            # Prepare state by instantiating requisite objects and applying state_prep
-            q = eng.allocate_qureg(2)
-            state_prep(q)
-
+            # Prepare state by instantiating state_prep
+                q = state_prep(eng)
+                
             # Apply correction rotations for 'X' and 'Y' gates in Hamiltonian
-            for rotation, qubit_index in zip(rotations, marked_qubits):
-                rotation | q[qubit_index]
+                for rotation, qubit_index in reversed(rotations):
+                    rotation | q[qubit_index]
 
             # Measure and flush engine
-            All(Measure) | q
-            eng.flush()
+                All(Measure) | q
+                eng.flush()
 
             # Append each bitstring resulting from measurement to results
-            results.append([int(qubit) for qubit in q])
+                results.append([int(qubit) for qubit in q])
 
 
 
@@ -111,26 +114,36 @@ class VQE(object):
         # Convert results into a dictionary with bitstring tuples as keys,
         # number of occurences as values
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        bitstring_tuples = list(map(tuple, results))
-        freq = Counter(bitstring_tuples)
+            bitstring_tuples = list(map(tuple, results))
+            freq = Counter(bitstring_tuples)
 
         
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # Add or subtract from expectation value depending on number of 1's in bitstring
+        # If number of 1s is odd, subtract from total expectation value. If even, add.
+        # Reasoning is that reading out a |0 > corresponds to an eigenvalue of +1, and
+        # reading out a |1 > corresponds to an eigenvalue of -1. We're multiplying the
+        # eigenvalues of each individual term, so if we had an odd number of terms we'd
+        # have an overall -1 multiplying the entire state
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        expectation = 0
-        for bitstring, count in freq.items():
-            number_of_1s = 0
-            for bit in bitstring:
-                if bit == 1:
-                    number_of_1s +=1
-            if number_of_1s % 2 == 0:
-                expectation += float(count)/shots
-            else:
-                expectation -= float(count)/shots
+            expectation = 0
+            for bitstring, count in freq.items():
+                number_of_1s = 0
+                for b, bit in enumerate(bitstring):
+                    if bit == 1 and b in marked_qubits:
+                        number_of_1s +=1
+                if number_of_1s % 2 == 0:
+                    expectation += coefficient*float(count)/shots
+                else:
+                    expectation -= coefficient*float(count)/shots
 
-        return expectation
+            expectation_total += expectation
+        
+
+        return expectation_total.real
+
+        
     
 
 
@@ -142,19 +155,26 @@ class VQE(object):
 if __name__ == "__main__":
 
 
+    from projectq.ops import H, X
+    import time
+    
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # First define a state_prep function. This should take our initialized state from
     # |0 0 > ----> |+ 1 >
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    def state_prep(qureg):
+    def state_prep(eng):
+        qureg = eng.allocate_qureg(2)
         H | qureg[0]
         X | qureg[1]
+        return qureg
 
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # Now let's create some example Hamiltonian. We'll use the Hamiltonian
-    # X*Z, where Z acts on the first qubit, Z acts on the second qubit
+    # Now let's create some example Hamiltonians.
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    hamiltonian_example = QubitOperator('X0 Z1')
+    ham_example1 = QubitOperator('X0 Z1', 3.0)
+    ham_example2 = QubitOperator('X0 Z1', 3.0) + \
+                           QubitOperator('Y1') + \
+                           QubitOperator('Z1', 2)
 
 
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -164,9 +184,14 @@ if __name__ == "__main__":
 
 
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # All of the above should result in an expectation value of -1.0. Let's check it out:
+    # We should find expectation value to be ~ -3.0 if we use ham_example1,
+    # and ~ -5.0 if we use ham_example2
+    # Let's check it out:
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    exp = VQE.expectation(state_prep, hamiltonian_example, 1000, eng_example)
-    print('Expectation: ', exp)
+    start = time.time()
+    exp = VQE().expectation(state_prep, ham_example2, 1000, eng_example)
+    end = time.time()
+    print('\nExpectation (calculated in', end - start, 'seconds):\n', exp, '\n')
 
-    assert exp == -1.0
+
+
