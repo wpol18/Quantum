@@ -1,4 +1,6 @@
 # Quantum
+__Note: I will be reorganizing the contents of this folder drastically, as right now the files are somewhat arbitrarily organized__
+
 This code repository serves to hold some code that explores quantum programming. As of now, there is only an education section
 where I will continue to upload Jupyter Notebooks of varying complexity using different quantum software frameworks
 
